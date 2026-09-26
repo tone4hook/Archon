@@ -4105,6 +4105,7 @@ export interface components {
         extensionFlags?: {
           [key: string]: boolean | string;
         };
+        extensions?: string[];
       };
       /** @enum {string} */
       effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';

@@ -17,16 +17,24 @@ export type { PiProviderDefaults };
  * plannotator's `plan` flag and a UI-capable context, while an `implement`
  * node runs headless without the planning-mode edit guard (issue #2073).
  *
- * The three fields are exactly the extension-posture subset of
+ * The fields are exactly the extension-posture subset of
  * `PiProviderDefaults`, so we derive rather than re-declare them.
  * `extensionFlags` is shallow-merged over the assistant-level flags (node
- * wins); set a flag to `false` to negate an inherited `true`. Merge and
- * precedence semantics live in {@link resolvePiExtensionSettings}.
+ * wins); set a flag to `false` to negate an inherited `true`. `extensions`
+ * replaces rather than merges. Merge and precedence semantics live in
+ * {@link resolvePiExtensionSettings}.
  */
 export type PiNodeOverride = Pick<
   PiProviderDefaults,
-  'enableExtensions' | 'interactive' | 'extensionFlags'
+  'enableExtensions' | 'interactive' | 'extensionFlags' | 'extensions'
 >;
+
+const EXTENSION_POSTURE_KEYS = [
+  'enableExtensions',
+  'interactive',
+  'extensionFlags',
+  'extensions',
+] as const;
 
 /** parsePiConfig output: assistant-level defaults plus optional per-node overrides. */
 export interface ParsedPiConfig extends PiProviderDefaults {
@@ -38,6 +46,12 @@ export interface PiExtensionSettings {
   enableExtensions: boolean;
   interactive: boolean;
   extensionFlags: Record<string, boolean | string> | undefined;
+  /**
+   * Explicit extension allow-list from the highest layer that set one;
+   * undefined means Pi discovers extensions itself. Kept even when
+   * `enableExtensions` is false so the caller can warn that it was ignored.
+   */
+  extensions: string[] | undefined;
 }
 
 /**
@@ -77,12 +91,15 @@ export function resolvePiExtensionSettings(
     ...nodeYaml?.extensionFlags,
   };
   const extensionFlags = Object.keys(merged).length > 0 ? merged : undefined;
-  return { enableExtensions, interactive, extensionFlags };
+  // Replace, not merge: an allow-list is only meaningful as one complete set,
+  // so a node that names its extensions must not inherit another layer's.
+  const extensions = nodeYaml?.extensions ?? configOverride?.extensions ?? config.extensions;
+  return { enableExtensions, interactive, extensionFlags, extensions };
 }
 
 /**
  * Parse the extension-posture fields shared by assistant-level config and
- * per-node overrides (`PiNodeOverride` deliberately mirrors these three
+ * per-node overrides (`PiNodeOverride` deliberately mirrors these
  * `PiProviderDefaults` fields — one validation rule, two config levels).
  */
 function parseExtensionPostureFields(raw: Record<string, unknown>): PiNodeOverride {
@@ -107,6 +124,17 @@ function parseExtensionPostureFields(raw: Record<string, unknown>): PiNodeOverri
     if (Object.keys(flags).length > 0) {
       parsed.extensionFlags = flags;
     }
+  }
+  if (Array.isArray(raw.extensions)) {
+    // An empty list is kept: it is a valid "load no extensions" allow-list.
+    parsed.extensions = [
+      ...new Set(
+        raw.extensions
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map(entry => entry.trim())
+          .filter(entry => entry.length > 0)
+      ),
+    ];
   }
   return parsed;
 }
@@ -170,7 +198,7 @@ export function parsePiConfig(raw: Record<string, unknown>): ParsedPiConfig {
 }
 
 function validateExtensionPosture(raw: Record<string, unknown>, path = ''): void {
-  assertKnownRunConfigKeys(raw, ['enableExtensions', 'interactive', 'extensionFlags']);
+  assertKnownRunConfigKeys(raw, [...EXTENSION_POSTURE_KEYS]);
   for (const key of ['enableExtensions', 'interactive'] as const) {
     if (raw[key] !== undefined && typeof raw[key] !== 'boolean') {
       invalidRunConfigValue(`${path}${key}`, 'a boolean');
@@ -184,6 +212,14 @@ function validateExtensionPosture(raw: Record<string, unknown>, path = ''): void
       if (typeof value !== 'boolean' && typeof value !== 'string') {
         invalidRunConfigValue(`${path}extensionFlags.${key}`, 'a boolean or string');
       }
+    }
+  }
+  if (raw.extensions !== undefined) {
+    if (
+      !Array.isArray(raw.extensions) ||
+      raw.extensions.some(entry => typeof entry !== 'string' || entry.trim().length === 0)
+    ) {
+      invalidRunConfigValue(`${path}extensions`, 'an array of non-empty extension sources');
     }
   }
 }
@@ -206,9 +242,7 @@ export function parsePiConfigStrict(
 ): ParsedPiConfig {
   assertKnownRunConfigKeys(raw, [
     'model',
-    'enableExtensions',
-    'interactive',
-    'extensionFlags',
+    ...EXTENSION_POSTURE_KEYS,
     'nodes',
     ...Object.keys(PROCESS_SCOPED_SETTINGS),
   ]);
@@ -241,9 +275,7 @@ export function parsePiConfigStrict(
   }
   validateExtensionPosture(
     Object.fromEntries(
-      ['enableExtensions', 'interactive', 'extensionFlags']
-        .filter(key => Object.hasOwn(raw, key))
-        .map(key => [key, raw[key]])
+      EXTENSION_POSTURE_KEYS.filter(key => Object.hasOwn(raw, key)).map(key => [key, raw[key]])
     )
   );
   if (raw.nodes !== undefined) {

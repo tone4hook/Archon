@@ -115,6 +115,17 @@ export interface PiProviderDefaults {
    */
   extensionFlags?: Record<string, boolean | string>;
   /**
+   * Explicit extension allow-list, equivalent to
+   * `pi --no-extensions -e <source> -e <source>`. When set, Pi's extension
+   * discovery is disabled and only these sources load. Each entry is anything
+   * `pi -e` accepts: a path (relative to the node's cwd, `~` expanded) or a
+   * package source. A listed extension that fails to load fails the node.
+   * Ignored when `enableExtensions` resolves false. Unlike `extensionFlags`,
+   * the highest-precedence layer that sets it replaces lower layers.
+   * @default undefined (discover all extensions)
+   */
+  extensions?: string[];
+  /**
    * Environment variables injected into `process.env` at session start so
    * in-process extensions (which read `process.env` directly) pick them up.
    * Existing `process.env` entries are NOT overridden — shell env wins over
@@ -638,7 +649,10 @@ export interface NodeConfig {
    * separate hand-mirror only because that package can't import runtime values
    * across the @archon/providers/types contract boundary.
    */
-  pi?: Pick<PiProviderDefaults, 'enableExtensions' | 'interactive' | 'extensionFlags'>;
+  pi?: Pick<
+    PiProviderDefaults,
+    'enableExtensions' | 'interactive' | 'extensionFlags' | 'extensions'
+  >;
   effort?: EffortRung;
   sandbox?: unknown;
   betas?: string[];

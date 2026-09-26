@@ -810,11 +810,14 @@ export class PiProvider implements IAgentProvider {
     // The portable node-YAML `pi:` block (#2133) rides on `nodeConfig.pi` and is
     // the highest-precedence layer — it travels with the workflow, so a node
     // rename can't orphan it the way the node-id-keyed config map can.
-    const { enableExtensions, interactive, extensionFlags } = resolvePiExtensionSettings(
-      piConfig,
-      nodeConfig?.nodeId,
-      nodeConfig?.pi
-    );
+    const { enableExtensions, interactive, extensionFlags, extensions } =
+      resolvePiExtensionSettings(piConfig, nodeConfig?.nodeId, nodeConfig?.pi);
+    if (!enableExtensions && extensions !== undefined && extensions.length > 0) {
+      yield {
+        type: 'system',
+        content: `⚠️ Pi ignored the extensions allow-list (${extensions.join(', ')}) because extensions are disabled for this node. Set \`enableExtensions: true\` to load them.`,
+      };
+    }
 
     // Build the ResourceLoader. When extensions are ON we MUST reuse a
     // process-cached, already-reloaded loader: Pi's `reload()` re-invokes every
@@ -831,10 +834,10 @@ export class PiProvider implements IAgentProvider {
     let resourceLoader: DefaultResourceLoader;
     const extensionProviderNames = new Set<string>();
     if (enableExtensions) {
-      const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
-        cwd,
-        loaderOptions
-      );
+      const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(cwd, {
+        ...loaderOptions,
+        ...(extensions !== undefined ? { extensionSources: extensions } : {}),
+      });
       resourceLoader = loader;
       // Re-apply the load-time extension provider registrations to THIS call's
       // fresh ModelRegistry (issue #2064). Extension factories run only during
@@ -884,6 +887,7 @@ export class PiProvider implements IAgentProvider {
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
+        extensionAllowListCount: enableExtensions ? extensions?.length : undefined,
         interactive,
         nodeId: nodeConfig?.nodeId,
         resumed: resumeSessionId !== undefined && !resumeFailed,

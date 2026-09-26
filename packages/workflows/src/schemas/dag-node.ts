@@ -164,6 +164,13 @@ export const piNodeConfigSchema = z.object({
    * an inherited `true` (extensions check `getFlag(name) === true`).
    */
   extensionFlags: z.record(z.string(), z.union([z.boolean(), z.string()])).optional(),
+  /**
+   * Explicit extension allow-list (`pi --no-extensions -e <source>...`). Replaces
+   * lower-layer lists; `[]` loads none. Paths resolve against the node's cwd.
+   */
+  extensions: z
+    .array(z.string().trim().min(1, "'pi.extensions' entries must be non-empty"))
+    .optional(),
 });
 
 export type PiNodeConfig = z.infer<typeof piNodeConfigSchema>;

@@ -846,6 +846,29 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
     expect(result.success).toBe(false);
   });
 
+  test('accepts an extensions allow-list, trimming entries and keeping []', () => {
+    const listed = dagNodeSchema.safeParse({
+      id: 'plan',
+      prompt: 'plan it',
+      pi: { extensions: [' ./exts/plan.ts', 'npm:pi-mcp-adapter'] },
+    });
+    expect(listed.success).toBe(true);
+    if (listed.success) {
+      expect((listed.data as AgentNode).pi).toEqual({
+        extensions: ['./exts/plan.ts', 'npm:pi-mcp-adapter'],
+      });
+    }
+    const none = dagNodeSchema.safeParse({ id: 'plan', prompt: 'p', pi: { extensions: [] } });
+    expect(none.success).toBe(true);
+  });
+
+  test('rejects blank or non-string extensions entries', () => {
+    for (const extensions of [[' '], [42], './exts/plan.ts']) {
+      const result = dagNodeSchema.safeParse({ id: 'plan', prompt: 'p', pi: { extensions } });
+      expect(result.success).toBe(false);
+    }
+  });
+
   test('pi is warned-ignored on non-AI + loop_group nodes but supported on loop', () => {
     // loop uses its per-iteration sendQuery, so pi must NOT be in its ignore list;
     // loop_group never sendQuerys (body nodes carry their own pi), so it warns.

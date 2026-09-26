@@ -61,6 +61,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
     reason: 'Sub-agent skill entries are capability identifiers',
   },
   'pi.extensionFlags.*': { kind: 'literal', reason: 'Pi extension flag values configure plugins' },
+  'pi.extensions.*': { kind: 'literal', reason: 'Pi extension entries are source paths' },
   effort: { kind: 'literal', reason: 'Effort is a provider reasoning-level enum' },
   systemPrompt: { kind: 'template', slots: ['systemPrompt'] },
   fallbackModel: { kind: 'literal', reason: 'Fallback model is a provider model identifier' },

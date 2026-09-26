@@ -57,6 +57,14 @@ export interface PiResourceLoaderOptions {
    * @default false
    */
   enableExtensions?: boolean;
+
+  /**
+   * Explicit extension allow-list (`pi --no-extensions -e <source>...`).
+   * When defined, Pi's extension discovery stays off and only these sources
+   * load, resolved by Pi relative to `cwd`. An empty array loads none. Only
+   * consulted when `enableExtensions` is true.
+   */
+  extensionSources?: string[];
 }
 
 /**
@@ -67,7 +75,8 @@ export interface PiResourceLoaderOptions {
  *
  * When `enableExtensions: true`, the `noExtensions` gate is lifted so Pi
  * discovers and loads tools + hooks from the community ecosystem (see
- * `PiResourceLoaderOptions.enableExtensions`). Skills and prompts/themes
+ * `PiResourceLoaderOptions.enableExtensions`), unless `extensionSources`
+ * narrows loading to an explicit allow-list. Skills and prompts/themes
  * remain suppressed even when extensions are enabled — skills are still
  * driven by Archon's explicit `additionalSkillPaths` plumbing.
  *
@@ -87,7 +96,12 @@ export function createPiResourceLoader(
     // Calling Pi's own `getAgentDir()` honors `PI_CODING_AGENT_DIR` and
     // matches the behavior of the pre-0.71 default exactly.
     agentDir: getAgentDir(),
-    noExtensions: options.enableExtensions !== true,
+    // An allow-list keeps discovery off; Pi still loads additionalExtensionPaths
+    // when noExtensions is true, exactly as `pi --no-extensions -e` does.
+    noExtensions: options.enableExtensions !== true || options.extensionSources !== undefined,
+    ...(options.enableExtensions === true && options.extensionSources !== undefined
+      ? { additionalExtensionPaths: options.extensionSources }
+      : {}),
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
@@ -170,18 +184,27 @@ export interface ReloadedExtensionLoader {
 }
 
 /**
- * Cache key over every input baked into the loader. `systemPrompt` and
- * `additionalSkillPaths` are included so a per-node override never silently
- * reuses a loader carrying a different prompt — a distinct prompt yields a
- * distinct loader (which is reloaded once on its own). In the common case
- * (uniform/absent prompt across nodes) all nodes share one cached loader.
+ * Cache key over every input baked into the loader. `systemPrompt`,
+ * `additionalSkillPaths`, and `extensionSources` are included so a per-node
+ * override never silently reuses a loader carrying a different prompt or
+ * extension set — a distinct input yields a distinct loader (which is reloaded
+ * once on its own). `null` (discover everything) and `[]` (load nothing) are
+ * different keys. In the common case (uniform inputs across nodes) all nodes
+ * share one cached loader.
  */
 function extensionLoaderCacheKey(
   cwd: string,
   systemPrompt: string | undefined,
-  additionalSkillPaths: readonly string[]
+  additionalSkillPaths: readonly string[],
+  extensionSources: readonly string[] | undefined
 ): string {
-  return JSON.stringify([cwd, systemPrompt ?? null, [...additionalSkillPaths].sort()]);
+  return JSON.stringify([
+    cwd,
+    systemPrompt ?? null,
+    [...additionalSkillPaths].sort(),
+    // Not sorted: Pi loads extensions in list order, which decides conflicts.
+    extensionSources ?? null,
+  ]);
 }
 
 /**
@@ -198,12 +221,16 @@ function extensionLoaderCacheKey(
  */
 export async function getOrCreateReloadedExtensionLoader(
   cwd: string,
-  options: Pick<PiResourceLoaderOptions, 'systemPrompt' | 'additionalSkillPaths'> = {}
+  options: Pick<
+    PiResourceLoaderOptions,
+    'systemPrompt' | 'additionalSkillPaths' | 'extensionSources'
+  > = {}
 ): Promise<ReloadedExtensionLoader> {
   const key = extensionLoaderCacheKey(
     cwd,
     options.systemPrompt,
-    options.additionalSkillPaths ?? []
+    options.additionalSkillPaths ?? [],
+    options.extensionSources
   );
   let pending = reloadedExtensionLoaderCache.get(key);
   if (!pending) {
@@ -215,6 +242,14 @@ export async function getOrCreateReloadedExtensionLoader(
       // would silently never apply.
       try {
         await loader.reload();
+        // Pi records a broken or missing extension in `errors` and carries on.
+        // That is right for discovery, but an allow-listed extension was named
+        // on purpose, so running the node without it would silently drop a
+        // capability the author asked for.
+        const { errors } = loader.getExtensions();
+        if (options.extensionSources !== undefined && errors.length > 0) {
+          throw new Error(errors.map(({ path, error }) => `${path}: ${error}`).join('; '));
+        }
         // Snapshot NOW, before any session's bindCore() drains the queue into
         // its own ModelRegistry and clears it. Defensive copy: bindCore()
         // reassigns the array, so the copy stays stable, but a copy also
@@ -230,11 +265,12 @@ export async function getOrCreateReloadedExtensionLoader(
         // isn't left with a bare Pi SDK message. The failed promise is evicted
         // below, so the next call retries cleanly.
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Pi extension load failed: ${message}. Check the extensions in ~/.pi/agent/extensions/ ` +
-            "(and the repo's .pi/), or set `assistants.pi.enableExtensions: false` to run without them.",
-          { cause: error }
-        );
+        const hint =
+          options.extensionSources !== undefined
+            ? 'Check the paths and sources listed in the Pi `extensions` setting for this node.'
+            : "Check the extensions in ~/.pi/agent/extensions/ (and the repo's .pi/), or set " +
+              '`assistants.pi.enableExtensions: false` to run without them.';
+        throw new Error(`Pi extension load failed: ${message}. ${hint}`, { cause: error });
       }
     })();
     reloadedExtensionLoaderCache.set(key, pending);

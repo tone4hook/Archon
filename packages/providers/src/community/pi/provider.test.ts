@@ -2731,6 +2731,76 @@ describe('PiProvider', () => {
     expect(mockSetFlagValue).not.toHaveBeenCalled();
   });
 
+  // ─── Extension allow-list (pi --no-extensions -e …) ──────────────────────
+
+  test('an extensions allow-list disables discovery and passes only the listed sources', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { extensions: ['./global.ts'] },
+        nodeConfig: { nodeId: 'plan', pi: { extensions: ['./plan.ts', '~/.pi/mcp.ts'] } },
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    // Node-YAML list replaces the assistant-level list rather than merging.
+    expect(loaderArgs?.noExtensions).toBe(true);
+    expect(loaderArgs?.additionalExtensionPaths).toEqual(['./plan.ts', '~/.pi/mcp.ts']);
+    // Extensions are still on, so session_start fires for the loaded set.
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+  });
+
+  test('without an allow-list, discovery stays on and no explicit sources are passed', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { nodes: { implement: { extensions: ['./impl.ts'] } } },
+        nodeConfig: { nodeId: 'plan' },
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.noExtensions).toBe(false);
+    expect(loaderArgs).not.toHaveProperty('additionalExtensionPaths');
+  });
+
+  test('an allow-list on a node with extensions disabled is ignored with a warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: false },
+        nodeConfig: { nodeId: 'plan', pi: { extensions: ['./plan.ts'] } },
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.noExtensions).toBe(true);
+    expect(loaderArgs).not.toHaveProperty('additionalExtensionPaths');
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(
+      systemChunks.some(c => c.content.includes('ignored the extensions allow-list (./plan.ts)'))
+    ).toBe(true);
+  });
+
   test('assistantConfig.env applies to process.env when not already set', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     delete process.env.PI_TEST_ONE;

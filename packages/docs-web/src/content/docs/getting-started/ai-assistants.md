@@ -431,7 +431,7 @@ Most extensions need three config surfaces:
 
 #### Scoping extension posture per node
 
-`enableExtensions`, `interactive`, and `extensionFlags` are the three fields that make up a node's **extension posture**. Setting them under `assistants.pi` applies the posture to *every* Pi node in *every* workflow — which is usually wrong. A planning extension like plannotator only belongs on the node that actually plans: if the same `plan: true` flag leaks into a downstream `implement` node, that node starts in planning mode, its code edits get blocked ("edits are limited to markdown files"), and it hangs waiting on a review nobody asked for.
+`enableExtensions`, `interactive`, `extensionFlags`, and `extensions` are the fields that make up a node's **extension posture**. Setting them under `assistants.pi` applies the posture to *every* Pi node in *every* workflow — which is usually wrong. A planning extension like plannotator only belongs on the node that actually plans: if the same `plan: true` flag leaks into a downstream `implement` node, that node starts in planning mode, its code edits get blocked ("edits are limited to markdown files"), and it hangs waiting on a review nobody asked for.
 
 Scope the posture to the node that plays that role. Three layers resolve per node, in ascending precedence:
 
@@ -439,7 +439,7 @@ Scope the posture to the node that plays that role. Three layers resolve per nod
 2. **Install-level node map** (`assistants.pi.nodes.<nodeId>`) — overrides the default for a node id on this machine. Handy when you can't edit the workflow, but it's non-portable: the override lives in one machine's `config.yaml` and is keyed by node-id string, so a node rename silently orphans it.
 3. **Portable node `pi:` block** — the per-node posture written directly in the workflow YAML. It travels with the workflow and wins over both layers above. This is the recommended surface.
 
-Each layer's `extensionFlags` shallow-merge over the ones below it (later wins per key), so a node can negate an inherited flag with `plan: false`. The `pi:` block is honored on `prompt`, `command`, and `loop` nodes (a `loop:` node's per-iteration call is exactly where planning mode tends to leak); on a `loop_group` it's ignored with a warning — put it on the body nodes instead.
+Each layer's `extensionFlags` shallow-merge over the ones below it (later wins per key), so a node can negate an inherited flag with `plan: false`. An `extensions` list is different: the highest layer that sets one replaces the lists below it (see [Loading only specific extensions](#loading-only-specific-extensions)). The `pi:` block is honored on `prompt`, `command`, and `loop` nodes (a `loop:` node's per-iteration call is exactly where planning mode tends to leak); on a `loop_group` it's ignored with a warning — put it on the body nodes instead.
 
 **Example — [plannotator](https://github.com/dmcglinn/plannotator) (human-in-the-loop plan review):**
 
@@ -502,6 +502,29 @@ assistants:
         interactive: false
         extensionFlags: { plan: false }
 ```
+
+#### Loading only specific extensions
+
+By default an extension-enabled node loads everything Pi discovers. To load an exact set instead, give it an `extensions` list — the equivalent of `pi --no-extensions -e <source> -e <source>`:
+
+```yaml
+nodes:
+  - id: research
+    prompt: "Research $ARGUMENTS"
+    pi:
+      extensions:
+        - ~/.pi/agent/extensions/pi-mcp-adapter.ts
+        - ./tools/pi/router.ts        # relative to the node's working directory
+```
+
+- Discovery is off for that node: `~/.pi/agent/extensions/`, `pi install` packages, and the repo's `.pi/` are all skipped. Only the listed sources load.
+- Each entry is anything `pi -e` accepts — a file or directory path (relative paths resolve against the node's working directory, which is the run's worktree; `~` expands) or a package source such as `npm:<package>`.
+- `extensions: []` loads no extensions.
+- A listed extension that is missing or fails to load fails the node, instead of running without it.
+- `extensions` works at all three layers (`assistants.pi.extensions`, `assistants.pi.nodes.<nodeId>.extensions`, the node's `pi:` block). The highest layer that sets it wins outright — lists are not merged.
+- It only narrows what loads. If `enableExtensions` resolves to `false` for the node, nothing loads and the node reports that the list was ignored.
+
+`extensions` controls which extension code loads; it does not filter tools. `allowed_tools` / `denied_tools` still apply only to Pi's built-in tools.
 
 #### Recipe: web search and fetch through your own extension
 
@@ -611,7 +634,7 @@ Note that `execute` must return an `AgentToolResult` (`{ content, details }`); a
 The bridge runs inside the Pi session process, subject to everything above: it loads only when `enableExtensions` is true for that node, its tools are just tools (so you can keep them off nodes with a scoped `pi:` block), and if it needs a UI-bound approval gate you give it `interactive: true`. Community bridges exist too — search the [package ecosystem](https://shittycodingagent.ai/packages) for `mcp` before writing your own.
 
 :::warning Repo-controlled `.pi/` directories
-Extension discovery also includes `<cwd>/.pi/extensions/*.ts` and `<cwd>/.pi/settings.json` in the **working directory of the run**. When Archon executes a workflow against a repository you didn't write, anything shipped in that repo's `.pi/` loads automatically — arbitrary JS with the Archon server's OS permissions — unless you disable extensions. Before running workflows on third-party repos either audit their `.pi/` directory first or set `enableExtensions: false` (globally, or per node via the `pi:` block). This trust decision lives with the operator; Archon will not make it for you.
+Extension discovery also includes `<cwd>/.pi/extensions/*.ts` and `<cwd>/.pi/settings.json` in the **working directory of the run**. When Archon executes a workflow against a repository you didn't write, anything shipped in that repo's `.pi/` loads automatically — arbitrary JS with the Archon server's OS permissions — unless you disable extensions or name them explicitly. Before running workflows on third-party repos either audit their `.pi/` directory first, set `enableExtensions: false`, or give the node an `extensions` allow-list (globally, or per node via the `pi:` block). This trust decision lives with the operator; Archon will not make it for you.
 :::
 
 ### Model reference format
@@ -656,7 +679,7 @@ nodes:
 
 | Feature | Support | YAML field |
 |---|---|---|
-| Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension. Scope per node with a `pi:` block (`pi: { interactive, enableExtensions, extensionFlags }`) — see [Scoping extension posture per node](#scoping-extension-posture-per-node) |
+| Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension. `extensions: [<source>, ...]` loads only the listed extensions. Scope per node with a `pi:` block (`pi: { interactive, enableExtensions, extensionFlags, extensions }`) — see [Scoping extension posture per node](#scoping-extension-posture-per-node) |
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
 | Reasoning control | ✅ | `effort: minimal\|low\|medium\|high\|xhigh\|max\|ultra\|persistent` (`ultra` and `persistent` map to Pi's native `max`; the other rungs pass through) |

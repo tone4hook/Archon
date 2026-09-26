@@ -277,6 +277,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: true,
       extensionFlags: undefined,
+      extensions: undefined,
     });
   });
 
@@ -294,6 +295,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: true,
       extensionFlags: { plan: true },
+      extensions: undefined,
     });
   });
 
@@ -310,6 +312,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: true,
       extensionFlags: { plan: true },
+      extensions: undefined,
     });
   });
 
@@ -350,6 +353,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: false,
       interactive: false,
       extensionFlags: undefined,
+      extensions: undefined,
     });
   });
 
@@ -368,11 +372,13 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: false,
       interactive: false,
       extensionFlags: undefined,
+      extensions: undefined,
     });
     expect(resolvePiExtensionSettings(config, 'plan')).toEqual({
       enableExtensions: true,
       interactive: true,
       extensionFlags: undefined,
+      extensions: undefined,
     });
   });
 
@@ -394,6 +400,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: false,
       extensionFlags: { plan: false },
+      extensions: undefined,
     });
   });
 
@@ -407,6 +414,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: false,
       extensionFlags: { plan: false },
+      extensions: undefined,
     });
   });
 
@@ -437,6 +445,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: false,
       interactive: false,
       extensionFlags: undefined,
+      extensions: undefined,
     });
   });
 
@@ -455,6 +464,7 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: false,
       extensionFlags: { plan: false },
+      extensions: undefined,
     });
   });
 
@@ -472,6 +482,75 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: true,
       extensionFlags: { plan: true },
+      extensions: undefined,
     });
+  });
+});
+
+describe('Pi extension allow-list', () => {
+  test('parses extensions: trims, de-dupes, drops non-string and blank entries', () => {
+    expect(parsePiConfig({ extensions: [' ./a.ts', './a.ts', 3, '', '~/.pi/b.ts'] })).toEqual({
+      extensions: ['./a.ts', '~/.pi/b.ts'],
+    });
+  });
+
+  test('keeps an empty list as a load-nothing allow-list', () => {
+    expect(parsePiConfig({ extensions: [] })).toEqual({ extensions: [] });
+  });
+
+  test('drops a non-array extensions value', () => {
+    expect(parsePiConfig({ extensions: './a.ts' })).toEqual({});
+  });
+
+  test('parses a per-node extensions override', () => {
+    expect(parsePiConfig({ nodes: { plan: { extensions: ['./plan.ts'] } } })).toEqual({
+      nodes: { plan: { extensions: ['./plan.ts'] } },
+    });
+  });
+
+  test('defaults to discovery (undefined) when no layer sets a list', () => {
+    expect(resolvePiExtensionSettings({}, 'plan').extensions).toBeUndefined();
+  });
+
+  test('highest layer replaces lower lists instead of merging', () => {
+    const config = {
+      extensions: ['./global.ts'],
+      nodes: { plan: { extensions: ['./config-node.ts'] } },
+    };
+    expect(resolvePiExtensionSettings(config, 'review').extensions).toEqual(['./global.ts']);
+    expect(resolvePiExtensionSettings(config, 'plan').extensions).toEqual(['./config-node.ts']);
+    expect(
+      resolvePiExtensionSettings(config, 'plan', { extensions: ['./yaml-node.ts'] }).extensions
+    ).toEqual(['./yaml-node.ts']);
+    expect(resolvePiExtensionSettings(config, 'plan', { extensions: [] }).extensions).toEqual([]);
+  });
+
+  test('keeps the list when extensions are disabled so the provider can warn', () => {
+    expect(
+      resolvePiExtensionSettings({ enableExtensions: false, extensions: ['./a.ts'] }, 'plan')
+    ).toMatchObject({ enableExtensions: false, extensions: ['./a.ts'] });
+  });
+
+  test.each(['install', 'run'] as const)(
+    'strict %s config accepts extensions at both levels',
+    scope => {
+      expect(
+        parsePiConfigStrict({ extensions: ['./a.ts'], nodes: { plan: { extensions: [] } } }, scope)
+      ).toEqual({ extensions: ['./a.ts'], nodes: { plan: { extensions: [] } } });
+    }
+  );
+
+  test('strict config rejects malformed extensions with the offending field path', () => {
+    const fieldPathOf = (raw: Record<string, unknown>): string | undefined => {
+      try {
+        parsePiConfigStrict(raw, 'install');
+      } catch (error) {
+        return error instanceof InvalidProviderRunConfigError ? error.fieldPath : undefined;
+      }
+      return undefined;
+    };
+    expect(fieldPathOf({ extensions: './a.ts' })).toBe('extensions');
+    expect(fieldPathOf({ extensions: ['./a.ts', ' '] })).toBe('extensions');
+    expect(fieldPathOf({ nodes: { plan: { extensions: [1] } } })).toBe('nodes.plan.extensions');
   });
 });
